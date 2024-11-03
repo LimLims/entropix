@@ -144,7 +144,7 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
                 freqs_cis[cur_pos:cur_pos+1],
                 kvcache
             )
-            next_token = sample_fn(logits, scores)
+            next_token = sample_fn(logits, scores, gen_tokens)
             gen_tokens.append(next_token)
             
             # Decode and print token

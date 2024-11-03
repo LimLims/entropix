@@ -294,7 +294,7 @@ class EntropixEngine:
         )
 
         # Sample next token
-        new_token = self.sample_fn(logits, scores)
+        new_token = self.sample_fn(logits, scores, decode_state["tokens"])
 
         # Package results
         result = ResultTokens(
