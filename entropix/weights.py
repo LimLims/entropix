@@ -242,6 +242,7 @@ def load_weights(ckpt_dir: Path, n_layers: int = 24):
     )
     
     print(f"Weight loading took: {time.time() - start_time:.2f} seconds")
+    print(jax.devices(xfmr_weights.tok_embeddings))
     
     # Verify device placement
     def check_device(arr):
