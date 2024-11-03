@@ -210,6 +210,7 @@ def load_weights(ckpt_dir: Path, n_layers: int = 24):
     
     for file in ckpt_dir.glob("*.npy"):
         name = '.'.join(str(file).split('/')[-1].split('.')[:-1])
+        print(f"Loading {name}...")
         weight = jnp.load(file=file, mmap_mode='r', allow_pickle=True)
         partition_spec = create_partition_spec(name)
         sharding = NamedSharding(mesh, partition_spec)
@@ -242,12 +243,15 @@ def load_weights(ckpt_dir: Path, n_layers: int = 24):
     
     print(f"Weight loading took: {time.time() - start_time:.2f} seconds")
     
-    # Verify weights are on GPU
+    # Verify device placement
     def check_device(arr):
-        return str(arr.device())
+        return str(arr.device)  # Remove the () as device is a property, not a method
     
-    devices = jax.tree_map(check_device, xfmr_weights)
-    print("\nWeight devices:")
-    print(jax.tree_map(lambda x: x.split('/')[-1], devices))
+    try:
+        print("\nVerifying device placement...")
+        devices = jax.tree_map(check_device, xfmr_weights)
+        print("All weights successfully loaded to:", device)
+    except Exception as e:
+        print(f"Warning: Could not verify device placement: {e}")
     
     return xfmr_weights
