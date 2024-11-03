@@ -151,21 +151,9 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
 
     def generate(xfmr_weights, model_params, tokens):
         """Generate text from input tokens."""
-        
-        @functools.partial(jax.jit, static_argnames=("cur_pos",))
-        def generate_step(weights, params, tokens, cur_pos, freqs_cis_slice, kvcache, attn_mask=None):
-            return xfmr_fn(
-                weights,
-                params,
-                tokens,
-                cur_pos,
-                freqs_cis_slice,
-                kvcache,
-                attn_mask=attn_mask
-            )
-        
         gen_tokens = None
         cur_pos = 0
+        # Place input tokens on GPU
         tokens = jax.device_put(jnp.array([tokens], jnp.int32), jax.devices("gpu")[0])
         bsz, seqlen = tokens.shape
         attn_mask = build_attn_mask(seqlen, cur_pos)
@@ -184,7 +172,7 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
         )
 
         # Initial forward pass
-        logits, kvcache, scores = generate_step(
+        logits, kvcache, scores = xfmr_fn(
             xfmr_weights,
             model_params,
             tokens,
@@ -206,7 +194,7 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
         # Generation loop
         while cur_pos < model_params.max_seq_len:
             cur_pos += 1
-            logits, kvcache, scores = generate_step(
+            logits, kvcache, scores = xfmr_fn(
                 xfmr_weights,
                 model_params,
                 next_token,
