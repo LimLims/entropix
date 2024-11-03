@@ -46,6 +46,9 @@ def create_partition_spec(key):
         return PS(fsdp, mp)
     else:
         return PS(mp, fsdp)
+    
+def create_partition_spec(key):
+    return PS()
 
 def translate_key(in_key: str):
     """Translates HuggingFace SmolLM keys to our format."""
