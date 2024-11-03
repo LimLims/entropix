@@ -77,19 +77,26 @@ def attention(x: jax.Array,
     
     #print(f"attn_mask shape: {attn_mask.shape}")  # Expected: (37,2048)
 
-    # Use jax.lax.cond instead of Python if
     def add_mask(_):
         return scores + attn_mask  # (1,32,37,2048) + (37,2048) -> Broadcastable
 
     def do_not_add_mask(_):
         return scores
 
-    scores = lax.cond(
-        cur_pos == 0,
-        add_mask,
-        do_not_add_mask,
-        operand=None
-    )
+    def conditional_add_mask(scores, attn_mask, cur_pos):
+        # Define functions based on whether attn_mask is None
+        def handle_none_mask(_):
+            return lax.cond(cur_pos == 0, do_not_add_mask, lambda _: scores, operand=None)
+
+        def handle_non_none_mask(_):
+            return lax.cond(cur_pos == 0, add_mask, do_not_add_mask, operand=None)
+
+        # Conditionally apply based on the presence of attn_mask
+        return lax.cond(attn_mask is None, handle_none_mask, handle_non_none_mask, operand=None)
+
+    # Example usage
+    scores = conditional_add_mask(scores, attn_mask, cur_pos)
+
 
     # Apply masking
     mask = jnp.where(scores != 0.0, scores, DEFAULT_MASK_VALUE)
