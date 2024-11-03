@@ -73,8 +73,9 @@ def attention(x: jax.Array,
     scores = pre_scores.astype(jnp.float32)  # Always do attention softmax at float32
 
     # Debugging shapes
-    print(f"scores shape: {scores.shape}")        # Expected: (1,32,37,2048)
-    print(f"attn_mask shape: {attn_mask.shape}")  # Expected: (37,2048)
+    #print(f"scores shape: {scores.shape}")        # Expected: (1,32,37,2048)
+    
+    #print(f"attn_mask shape: {attn_mask.shape}")  # Expected: (37,2048)
 
     # Use jax.lax.cond instead of Python if
     def add_mask(_):
