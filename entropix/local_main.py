@@ -121,53 +121,7 @@ def __build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
         mask = jnp.hstack([jnp.zeros((seqlen, start_pos)), mask], dtype=jnp.float32)
     return mask
 
-def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
-    # Print JAX configuration
-    print("\nJAX Configuration:")
-    print("==================")
-    print(f"JAX version: {jax.__version__}")
-    print(f"Available devices: {jax.devices()}")
-    print(f"Default backend: {jax.default_backend()}")
-    print(f"Process index: {jax.process_index()}")
-    print(f"Local device count: {jax.local_device_count()}")
-    
-    
-    """Main function for local inference."""
-    # Initialize model parameters
-    model_params = SMOLLM_PARAMS
-
-    # First download weights if they don't exist
-    if not weights_path.exists():
-        print(f"Downloading weights to {weights_path}...")
-        download_weights(out_dir=weights_path)
-    
-    # Load weights and initialize components
-    xfmr_weights = load_weights(weights_path.absolute(), n_layers=model_params.n_layers)
-    tokenizer = Tokenizer('tokenizer.json')
-    #xfmr_fn = jax.jit(xfmr, static_argnames=("model_params", "cur_pos"))
-
-    #sample_fn = jax.jit(sample)
-
-    print("\nCompiling functions...")
-    start_time = time.time()
-
-    # JIT compile the transformer and sampling functions
-    xfmr_fn = jax.jit(
-        xfmr, 
-        static_argnames=("model_params", "cur_pos"),
-        backend="gpu"
-    )
-    
-    sample_fn = jax.jit(
-        sample,
-        backend="gpu"
-    )
-    
-    print(f"Function compilation took: {time.time() - start_time:.2f} seconds")
-
-
-
-    def generate(xfmr_weights, model_params, tokens):
+def generate(xfmr_weights, model_params, tokens):
         """Generate text from input tokens."""
         print("\nStarting generate function...")
         print("Moving input tensors to GPU...")
@@ -268,6 +222,54 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
         print(f"\n\nGeneration stats:")
         print(f"Average time per token: {avg_token_time:.3f} seconds")
         print(f"Tokens per second: {1/avg_token_time:.2f}")
+
+def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
+    # Print JAX configuration
+    print("\nJAX Configuration:")
+    print("==================")
+    print(f"JAX version: {jax.__version__}")
+    print(f"Available devices: {jax.devices()}")
+    print(f"Default backend: {jax.default_backend()}")
+    print(f"Process index: {jax.process_index()}")
+    print(f"Local device count: {jax.local_device_count()}")
+    
+    
+    """Main function for local inference."""
+    # Initialize model parameters
+    model_params = SMOLLM_PARAMS
+
+    # First download weights if they don't exist
+    if not weights_path.exists():
+        print(f"Downloading weights to {weights_path}...")
+        download_weights(out_dir=weights_path)
+    
+    # Load weights and initialize components
+    xfmr_weights = load_weights(weights_path.absolute(), n_layers=model_params.n_layers)
+    tokenizer = Tokenizer('tokenizer.json')
+    #xfmr_fn = jax.jit(xfmr, static_argnames=("model_params", "cur_pos"))
+
+    #sample_fn = jax.jit(sample)
+
+    print("\nCompiling functions...")
+    start_time = time.time()
+
+    # JIT compile the transformer and sampling functions
+    xfmr_fn = jax.jit(
+        xfmr, 
+        static_argnames=("model_params", "cur_pos"),
+        backend="gpu"
+    )
+    
+    sample_fn = jax.jit(
+        sample,
+        backend="gpu"
+    )
+    
+    print(f"Function compilation took: {time.time() - start_time:.2f} seconds")
+
+
+
+    
         
     def __generate(xfmr_weights, model_params, tokens):
         """Generate text from input tokens."""
