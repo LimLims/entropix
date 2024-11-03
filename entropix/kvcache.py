@@ -1,0 +1,40 @@
+# File: entropix/kvcache.py
+
+import functools
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+
+class KVCache(NamedTuple):
+    k: jax.Array
+    v: jax.Array
+
+    @classmethod
+    @functools.partial(jax.jit, static_argnums=(0,1,2,3,4,5))
+    def new(cls, layers: int, bsz: int, max_seq_len: int, kv_heads: int, head_dim: int) -> 'KVCache':
+        """Initialize a new KV cache."""
+        return cls(
+            k=jnp.zeros((layers, bsz, max_seq_len, kv_heads, head_dim), dtype=jnp.bfloat16),
+            v=jnp.zeros((layers, bsz, max_seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+        )
+
+    def update(self, xk: jax.Array, xv: jax.Array, layer_idx: int, cur_pos: int, n_rep: int):
+        """Update cache with new key-value pairs."""
+        # Update cache
+        ck = jax.lax.dynamic_update_slice(
+            self.k,
+            jnp.bfloat16(xk[None, ...]),
+            (layer_idx, 0, cur_pos, 0, 0)
+        )
+        cv = jax.lax.dynamic_update_slice(
+            self.v,
+            jnp.bfloat16(xv[None, ...]),
+            (layer_idx, 0, cur_pos, 0, 0)
+        )
+
+        # Repeat keys and values for attention heads
+        keys = jnp.repeat(ck[layer_idx], n_rep, axis=2)
+        values = jnp.repeat(cv[layer_idx], n_rep, axis=2)
+
+        return keys, values, KVCache(k=ck, v=cv)

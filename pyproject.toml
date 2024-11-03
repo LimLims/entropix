@@ -1,0 +1,74 @@
+[tool.poetry]
+name = "entropix"
+version = "0.1.0"
+description = ""
+authors = ['xjdr']
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+tiktoken = "0.4.0"
+pydantic = "^2.9.2"
+blobfile = "^3.0.0"
+ml-dtypes = "^0.5.0"
+rich = "^13.8.1"
+chex = "^0.1.87"
+tyro = "^0.8.11"
+jax = {extras = ["cuda12"], version = "^0.4.35"}
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.2"
+ruff = "^0.6.2"
+transformers = "^4.45.1"
+huggingface-hub = {extras = ["cli"], version = "^0.25.1"}
+
+
+[tool.poetry.group.test.dependencies]
+torch = "^2.4.1"
+fairscale = "^0.4.13"
+
+
+
+[tool.poetry.group.eval.dependencies]
+lm-eval = "^0.4.4"
+langdetect = "^1.0.9"
+immutabledict = "^4.2.0"
+
+
+
+[tool.poetry.group.server.dependencies]
+fastapi = "^0.115.3"
+pydantic = "^2.9.2"
+uvicorn = "^0.32.0"
+openai = "^1.52.2"
+
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+extend-exclude = ["tests/**"]
+lint.select = [
+  # pycodestyle
+  "E",
+  # Pyflakes
+  "F",
+  # pyupgrade
+  "UP",
+  # flake8-bugbear
+  "B",
+  # flake8-simplify
+  "SIM",
+  # isort
+  "I",
+  # Ruff
+  "RUF",
+]
+lint.ignore = [
+  "E501",   # ignore line-length (e.g. long docstring)
+  "SIM117", # ignore combine with statements (it leads to harder to read code)
+]
+line-length = 88
+indent-width = 2
