@@ -407,33 +407,27 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
     def generate(xfmr_weights, model_params, tokens):
         """Generate text from input tokens."""
         print("\nStarting generate function...")
-        print("Moving input tensors to GPU...")
-        
-        gen_tokens = None
-        cur_pos = 0
-        
-        # Explicitly move tensors to GPU and time the operations
         start_time = time.time()
+        
         device = jax.devices("gpu")[0]
         
-        # Move weights to GPU if needed
-        print("Moving weights to GPU...")
-        xfmr_weights = jax.tree_map(lambda x: jax.device_put(x, device), xfmr_weights)
-        
+        print("Setting up initial tensors...")
         tokens = jax.device_put(jnp.array([tokens], jnp.int32), device)
         bsz, seqlen = tokens.shape
         
-        attn_mask = jax.device_put(build_attn_mask(seqlen, cur_pos), device)
-        freqs_cis = jax.device_put(
-            precompute_freqs_cis(
-                model_params.head_dim,
-                model_params.max_seq_len,
-                model_params.rope_theta,
-                model_params.use_scaled_rope
-            ),
-            device
-        )
+        # Ensure all inputs are on GPU with correct shapes
+        attn_mask = build_attn_mask(seqlen, 0)
+        attn_mask = jax.device_put(attn_mask[None, None, :, :], device)  # Add batch and head dims
         
+        freqs_cis = precompute_freqs_cis(
+            model_params.head_dim,
+            model_params.max_seq_len,
+            model_params.rope_theta,
+            model_params.use_scaled_rope
+        )
+        freqs_cis = jax.device_put(freqs_cis, device)
+        
+        # Create KV cache directly on GPU
         kvcache = KVCache.new(
             model_params.n_layers,
             bsz,
@@ -441,25 +435,30 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
             model_params.n_local_kv_heads,
             model_params.head_dim
         )
-        kvcache = jax.tree_map(lambda x: jax.device_put(x, device), kvcache)
+        kvcache = jax.tree_util.tree_map(lambda x: jax.device_put(x, device), kvcache)
         
         print(f"Initial setup took: {time.time() - start_time:.2f} seconds")
 
-        # Initial forward pass
+        # First forward pass
         print("\nStarting first forward pass...")
-        start_time = time.time()
+        forward_start = time.time()
         
-        logits, kvcache, scores = xfmr_fn(
-            xfmr_weights,
-            model_params,
-            tokens,
-            cur_pos,
-            freqs_cis[:seqlen],
-            kvcache,
-            attn_mask=attn_mask
-        )
-        jax.block_until_ready(logits)  # Make sure computation is complete
-        print(f"First forward pass took: {time.time() - start_time:.2f} seconds")
+        with jax.profiler.trace("/tmp/jax-trace"):
+            logits, kvcache, scores = xfmr_fn(
+                xfmr_weights,
+                model_params,
+                tokens,
+                0,  # cur_pos
+                freqs_cis[:seqlen],
+                kvcache,
+                attn_mask=attn_mask
+            )
+            jax.block_until_ready(logits)
+        
+        print(f"First forward pass took: {time.time() - forward_start:.2f} seconds")
+        print(f"Output device: {logits.device}")
+        print(f"Output shapes - logits: {logits.shape}, scores: {scores.shape}")
+
 
         # Get first token
         next_token = jnp.argmax(logits[:, -1], axis=-1, keepdims=True).astype(jnp.int32)
@@ -510,48 +509,66 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
     prompt = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>test<|eot_id|>"""
     tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')
     
-    # Do a warmup pass to trigger compilation
+    # Modified warmup pass
     print("\nDoing warmup pass...")
     try:
-        warmup_tokens = jax.device_put(jnp.array([tokens[:10]], jnp.int32), device)
+        device = jax.devices('gpu')[0]
+        seqlen = 32  # Use model's expected sequence length
+        warmup_tokens = jax.device_put(jnp.zeros((1, seqlen), jnp.int32), device)
+        
         warmup_freqs = jax.device_put(
             precompute_freqs_cis(
                 model_params.head_dim,
-                10,
+                model_params.max_seq_len,  # Use full context length
                 model_params.rope_theta,
                 model_params.use_scaled_rope
             ),
             device
         )
+        
         warmup_kvcache = KVCache.new(
             model_params.n_layers,
-            1,
-            10,
+            1,  # batch size
+            model_params.max_seq_len,  # Use full context length
             model_params.n_local_kv_heads,
             model_params.head_dim
         )
-        warmup_mask = build_attn_mask(10, 0)
         
+        # Build proper attention mask
+        warmup_mask = build_attn_mask(seqlen, 0)
+        warmup_mask = jax.device_put(warmup_mask, device)
+        
+        # Do a small warmup pass
+        print("Running warmup inference...")
         start = time.time()
-        logits, _, _ = xfmr_fn(
-            xfmr_weights,
-            model_params,
-            warmup_tokens,
-            0,
-            warmup_freqs,
-            warmup_kvcache,
-            attn_mask=warmup_mask
-        )
-        logits.block_until_ready()
+        with jax.profiler.trace("/tmp/jax-trace"):  # Add profiling
+            logits, _, _ = xfmr_fn(
+                xfmr_weights,
+                model_params,
+                warmup_tokens,
+                0,
+                warmup_freqs[:seqlen],
+                warmup_kvcache,
+                attn_mask=warmup_mask
+            )
+        
+        # Make sure computation is complete
+        jax.block_until_ready(logits)
         print(f"Warmup pass took: {time.time() - start:.2f} seconds")
-        print(f"Warmup ran on device: {logits.device()}")
+        print(f"Warmup output device: {logits.device}")
+        print(f"Warmup output shape: {logits.shape}")
+        
     except Exception as e:
         print(f"Warmup failed with error: {e}")
+        import traceback
+        traceback.print_exc()
 
-    # Real generation
+    # Modified generation to use proper profiling
     print("\nStarting real generation...")
     tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')
-    generate(xfmr_weights, model_params, tokens)
+    
+    with jax.profiler.trace("/tmp/jax-trace"):  # Add profiling
+        generate(xfmr_weights, model_params, tokens)
 
 
 if __name__ == '__main__':
