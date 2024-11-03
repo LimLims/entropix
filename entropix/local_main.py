@@ -56,28 +56,35 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, use_scaled:
     freqs = jnp.outer(t, freqs)
     return jnp.exp(1j * freqs)
 
-def build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
+def build_attn_mask(seqlen: int, start_pos: int, max_seq_len: int = 2048) -> jax.Array:
     """Build an attention mask that allows attending to cached tokens and prevents attending to future tokens.
     
     Args:
         seqlen: Length of the current sequence
         start_pos: Number of cached tokens that can be attended to
+        max_seq_len: Maximum sequence length (context window size)
         
     Returns:
-        A mask of shape (1, 1, seqlen, seqlen + start_pos) for broadcasting with attention scores
+        A mask of shape (1, 1, seqlen, max_seq_len) for broadcasting with attention scores
     """
-    # Initialize mask
-    mask = jnp.full((seqlen, seqlen), float("-inf"), dtype=jnp.float32)
+    # Create mask for cached tokens (zeros)
+    cache_mask = jnp.zeros((seqlen, start_pos), dtype=jnp.float32)
     
+    # Create causal mask for current sequence
+    curr_seq_mask = jnp.full((seqlen, seqlen), float("-inf"), dtype=jnp.float32)
     if seqlen > 1:
-        # Create causal mask for current sequence
-        seqlen_mask = jnp.triu(jnp.ones((seqlen, seqlen), dtype=jnp.float32) * float("-inf"), k=1)
+        curr_seq_mask = jnp.triu(curr_seq_mask, k=1)
+    
+    # Create mask for padding (all -inf)
+    remaining_len = max_seq_len - (start_pos + seqlen)
+    if remaining_len > 0:
+        padding_mask = jnp.full((seqlen, remaining_len), float("-inf"), dtype=jnp.float32)
         
-        # Create mask for cached tokens
-        cache_mask = jnp.zeros((seqlen, start_pos), dtype=jnp.float32)
-        
-        # Combine into final mask
-        mask = jnp.concatenate([cache_mask, seqlen_mask], axis=1)
+        # Combine all parts: [cache_tokens | current_sequence | padding]
+        mask = jnp.concatenate([cache_mask, curr_seq_mask, padding_mask], axis=1)
+    else:
+        # Just combine cache and current sequence if no padding needed
+        mask = jnp.concatenate([cache_mask, curr_seq_mask], axis=1)
     
     # Add broadcast dimensions to match scores shape (batch, heads, seq, seq)
     mask = mask[None, None, :, :]
