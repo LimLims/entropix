@@ -164,7 +164,8 @@ def load_weights(ckpt_dir: Path, n_layers: int = 24):  # Default to SmolLM layer
     for file in ckpt_dir.glob("*.npy"):
         name = '.'.join(str(file).split('/')[-1].split('.')[:-1])
         weight = jnp.load(file=file, mmap_mode='r', allow_pickle=True)
-        partition_spec = create_partition_spec(name)
+        #partition_spec = create_partition_spec(name)
+        partition_spec = PS()
         sharding = NamedSharding(mesh, partition_spec)
         w[name] = jax.device_put(weight, sharding)
     
