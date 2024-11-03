@@ -349,6 +349,105 @@ Can you help me understand how neural networks learn?<|eot_id|><|start_header_id
     tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')
     generate(xfmr_weights, model_params, tokens)
 
+
+
+def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
+    """Main function for local inference."""
+    # Detailed JAX configuration check
+    print("\nJAX Configuration:")
+    print("==================")
+    print(f"JAX version: {jax.__version__}")
+    print(f"JAX backend: {jax.default_backend()}")
+    print(f"Available devices: {jax.devices()}")
+    print(f"Available GPU devices: {jax.devices('gpu')}")
+    print(f"Available CPU devices: {jax.devices('cpu')}")
+    
+    # Test basic GPU operation
+    print("\nTesting basic GPU operation:")
+    try:
+        x = jax.random.normal(jax.random.PRNGKey(0), (1000, 1000))
+        device = jax.devices('gpu')[0]
+        x = jax.device_put(x, device)
+        start = time.time()
+        y = jnp.dot(x, x.T)
+        y.block_until_ready()
+        end = time.time()
+        print(f"Basic GPU matrix multiplication test took: {(end-start)*1000:.2f}ms")
+        print(f"Test ran on device: {y.device()}")
+    except Exception as e:
+        print(f"GPU test failed with error: {e}")
+        
+    # Initialize model parameters
+    model_params = SMOLLM_PARAMS
+
+    # Load weights and initialize components
+    print("\nLoading model...")
+    xfmr_weights = load_weights(weights_path.absolute(), n_layers=model_params.n_layers)
+    tokenizer = Tokenizer('tokenizer.json')
+
+    # JIT compile the transformer function with explicit platforms
+    print("\nCompiling functions...")
+    print("Setting XLA flags for GPU compilation...")
+    
+    # Try to force GPU compilation
+    platforms = jax.lib.xla_bridge.get_backend().platform
+    print(f"XLA backend platform: {platforms}")
+    
+    xfmr_fn = jax.jit(
+        xfmr, 
+        static_argnames=("model_params", "cur_pos"),
+        backend="gpu"
+    )
+    sample_fn = jax.jit(sample, backend="gpu")
+    
+    # Test tokenization
+    prompt = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>test<|eot_id|>"""
+    tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')
+    
+    # Do a warmup pass to trigger compilation
+    print("\nDoing warmup pass...")
+    try:
+        warmup_tokens = jax.device_put(jnp.array([tokens[:10]], jnp.int32), device)
+        warmup_freqs = jax.device_put(
+            precompute_freqs_cis(
+                model_params.head_dim,
+                10,
+                model_params.rope_theta,
+                model_params.use_scaled_rope
+            ),
+            device
+        )
+        warmup_kvcache = KVCache.new(
+            model_params.n_layers,
+            1,
+            10,
+            model_params.n_local_kv_heads,
+            model_params.head_dim
+        )
+        warmup_mask = build_attn_mask(10, 0)
+        
+        start = time.time()
+        logits, _, _ = xfmr_fn(
+            xfmr_weights,
+            model_params,
+            warmup_tokens,
+            0,
+            warmup_freqs,
+            warmup_kvcache,
+            attn_mask=warmup_mask
+        )
+        logits.block_until_ready()
+        print(f"Warmup pass took: {time.time() - start:.2f} seconds")
+        print(f"Warmup ran on device: {logits.device()}")
+    except Exception as e:
+        print(f"Warmup failed with error: {e}")
+
+    # Real generation
+    print("\nStarting real generation...")
+    tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')
+    generate(xfmr_weights, model_params, tokens)
+
+
 if __name__ == '__main__':
     # Configure XLA flags
     
