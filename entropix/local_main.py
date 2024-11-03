@@ -56,7 +56,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, use_scaled:
     freqs = jnp.outer(t, freqs)
     return jnp.exp(1j * freqs)
 
-def __build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
+def build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
 
     # Initialize a mask with -inf
     mask = jnp.full((seqlen, seqlen), float("-inf"), dtype=jnp.float32)
@@ -74,7 +74,7 @@ def __build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
     
     return mask
 
-def build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
+def __build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
     mask = jnp.zeros((seqlen, seqlen), dtype=jnp.float32)
     if seqlen > 1:
         mask = jnp.full((seqlen, seqlen), float('-inf'))
