@@ -57,20 +57,30 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, use_scaled:
     return jnp.exp(1j * freqs)
 
 def build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
-
-    # Initialize a mask with -inf
+    """Build an attention mask that allows attending to cached tokens and prevents attending to future tokens.
+    
+    Args:
+        seqlen: Length of the current sequence
+        start_pos: Number of cached tokens that can be attended to
+        
+    Returns:
+        A mask of shape (1, 1, seqlen, seqlen + start_pos) for broadcasting with attention scores
+    """
+    # Initialize mask
     mask = jnp.full((seqlen, seqlen), float("-inf"), dtype=jnp.float32)
     
     if seqlen > 1:
-        # Create an upper triangular matrix for the current sequence
+        # Create causal mask for current sequence
         seqlen_mask = jnp.triu(jnp.ones((seqlen, seqlen), dtype=jnp.float32) * float("-inf"), k=1)
         
-        # Concatenate zeros for the cached tokens
-        # Assuming cached tokens are in the first (key_len - seqlen) positions
+        # Create mask for cached tokens
         cache_mask = jnp.zeros((seqlen, start_pos), dtype=jnp.float32)
         
-        # Combine the masks
+        # Combine into final mask
         mask = jnp.concatenate([cache_mask, seqlen_mask], axis=1)
+    
+    # Add broadcast dimensions to match scores shape (batch, heads, seq, seq)
+    mask = mask[None, None, :, :]
     
     return mask
 
