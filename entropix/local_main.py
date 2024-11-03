@@ -615,13 +615,13 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
         xfmr, 
         static_argnames=("model_params", "cur_pos"),
         backend="gpu",
-        device=device
+        #device=device
     )
     
     sample_fn = jax.jit(
         sample,
         backend="gpu",
-        device=device
+        #device=device
     )
 
     def generate(xfmr_weights, model_params, tokens):
