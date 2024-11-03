@@ -153,6 +153,11 @@ def load_weights(ckpt_dir: Path, n_layers: int = 24):  # Default to SmolLM layer
     """Load SmolLM weights from checkpoint directory."""
     w = {}
     layer_weights = []
+
+    devices = jax.devices("gpu")
+    if not devices:
+        raise RuntimeError("No GPU devices found")
+    
     mesh = jax.sharding.Mesh(mesh_utils.create_device_mesh((1, 1)), ('mp', 'fsdp'))
     
     for file in ckpt_dir.glob("*.npy"):

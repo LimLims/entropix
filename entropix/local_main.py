@@ -1,5 +1,15 @@
 # File: entropix/local_main.py
 
+import os
+os.environ['XLA_FLAGS'] = (
+    '--xla_gpu_enable_triton_softmax_fusion=true '
+    '--xla_gpu_triton_gemm_any=True '
+    '--xla_gpu_enable_async_collectives=true '
+    '--xla_gpu_enable_latency_hiding_scheduler=true '
+    '--xla_gpu_enable_highest_priority_async_stream=true '
+)
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 from typing import Tuple
 import math
 from pathlib import Path
@@ -100,6 +110,10 @@ def __build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
     return mask
 
 def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
+    print("JAX devices:", jax.devices())
+    print("Default backend:", jax.default_backend())
+    print("Process backend:", jax.process_index())
+    
     """Main function for local inference."""
     # Initialize model parameters
     model_params = SMOLLM_PARAMS
@@ -198,13 +212,6 @@ Can you help me understand how neural networks learn?<|eot_id|><|start_header_id
 
 if __name__ == '__main__':
     # Configure XLA flags
-    import os
-    os.environ['XLA_FLAGS'] = (
-        '--xla_gpu_enable_triton_softmax_fusion=true '
-        '--xla_gpu_triton_gemm_any=True '
-        '--xla_gpu_enable_async_collectives=true '
-        '--xla_gpu_enable_latency_hiding_scheduler=true '
-        '--xla_gpu_enable_highest_priority_async_stream=true '
-    )
+    
     
     tyro.cli(main)
