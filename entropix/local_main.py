@@ -56,13 +56,23 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, use_scaled:
     freqs = jnp.outer(t, freqs)
     return jnp.exp(1j * freqs)
 
-def build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
-    """Build causal attention mask."""
-    mask = jnp.zeros((seqlen, seqlen), dtype=jnp.float32)
+def build_attn_mask(self, seqlen: int, cur_pos: int) -> jax.Array:
+    key_len = self.params.max_seq_len  # 2048
+    
+    # Initialize a mask with -inf
+    mask = jnp.full((seqlen, key_len), float("-inf"), dtype=jnp.float32)
+    
     if seqlen > 1:
-        mask = jnp.full((seqlen, seqlen), float('-inf'))
-        mask = jnp.triu(mask, k=1)
-        mask = jnp.hstack([jnp.zeros((seqlen, start_pos)), mask], dtype=jnp.float32)
+        # Create an upper triangular matrix for the current sequence
+        seqlen_mask = jnp.triu(jnp.ones((seqlen, seqlen), dtype=jnp.float32) * float("-inf"), k=1)
+        
+        # Concatenate zeros for the cached tokens
+        # Assuming cached tokens are in the first (key_len - seqlen) positions
+        cache_mask = jnp.zeros((seqlen, key_len - seqlen), dtype=jnp.float32)
+        
+        # Combine the masks
+        mask = jnp.concatenate([cache_mask, seqlen_mask], axis=1)
+    
     return mask
 
 def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):

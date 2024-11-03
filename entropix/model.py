@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 import math
 import jax
 import jax.numpy as jnp
+from jax import lax
 from functools import partial
 
 import os
@@ -71,8 +72,23 @@ def attention(x: jax.Array,
     pre_scores = scores / math.sqrt(model_params.head_dim)
     scores = pre_scores.astype(jnp.float32)  # Always do attention softmax at float32
 
-    if cur_pos == 0 and attn_mask is not None:
-        scores = scores + attn_mask
+    # Debugging shapes
+    print(f"scores shape: {scores.shape}")        # Expected: (1,32,37,2048)
+    print(f"attn_mask shape: {attn_mask.shape}")  # Expected: (37,2048)
+
+    # Use jax.lax.cond instead of Python if
+    def add_mask(_):
+        return scores + attn_mask  # (1,32,37,2048) + (37,2048) -> Broadcastable
+
+    def do_not_add_mask(_):
+        return scores
+
+    scores = lax.cond(
+        cur_pos == 0,
+        add_mask,
+        do_not_add_mask,
+        operand=None
+    )
 
     # Apply masking
     mask = jnp.where(scores != 0.0, scores, DEFAULT_MASK_VALUE)
