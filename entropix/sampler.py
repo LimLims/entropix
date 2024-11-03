@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Dict, Tuple
 import jax
+from jax import lax
 import jax.numpy as jnp
 
 MAX_K = 256
@@ -61,54 +62,86 @@ def sample(
     clarifying_question_token: int = 2564,
     key=jax.random.PRNGKey(1337),
 ) -> Tuple[jax.Array, str]:
+    """Sample next token based on model state.
+    
+    Args:
+        logits: Token logits from model output
+        attention_scores: Attention scores from model
+        gen_tokens: Previously generated tokens
+        clarifying_question_token: Token ID for clarifying questions
+        key: PRNG key for sampling
+    """
     cfg = SamplerConfig()
     metrics = calculate_metrics(logits, attention_scores)
-    ent, vent = metrics["logits_entropy"], metrics["logits_varentropy"]
+    ent, vent = metrics["logits_entropy"], metrics["logits_varentropy"] 
     attn_ent, attn_vent = metrics["attn_entropy"], metrics["attn_varentropy"]
 
-    def _and(*args):
-        res = True
-        for a in args:
-            res = jax.lax.bitwise_and(res, a)
-        return res
+    # Convert conditions to JAX array operations
+    def _and_jax(*conditions):
+        result = jnp.ones_like(conditions[0], dtype=jnp.bool_)
+        for cond in conditions:
+            result = jnp.logical_and(result, cond)
+        return result
 
-    # State detection conditions
-    FLOWING = _and(
+    # State detection conditions using JAX operations
+    FLOWING = _and_jax(
         ent < cfg.low_logits_entropy_threshold,
         vent < cfg.low_logits_varentropy_threshold,
         attn_ent < cfg.low_attention_entropy_threshold,
         attn_vent < cfg.low_attention_varentropy_threshold,
-    ).astype(float)
+    ).astype(jnp.float32)
 
-    TREADING = _and(
+    TREADING = _and_jax(
         ent > cfg.high_logits_entropy_threshold,
         vent < cfg.low_logits_varentropy_threshold,
         attn_ent < cfg.low_attention_entropy_threshold,
         attn_vent < cfg.low_attention_varentropy_threshold,
-    ).astype(float)
+    ).astype(jnp.float32)
 
-    EXPLORING = _and(
+    EXPLORING = _and_jax(
         ent < cfg.high_logits_entropy_threshold,
         vent > cfg.high_logits_varentropy_threshold,
         attn_ent < cfg.low_attention_entropy_threshold,
         attn_vent > cfg.high_attention_varentropy_threshold,
-    ).astype(float)
+    ).astype(jnp.float32)
 
-    RESAMPLING = _and(
+    RESAMPLING = _and_jax(
         ent > cfg.medium_logits_entropy_threshold,
         vent > cfg.high_logits_varentropy_threshold,
         attn_ent > cfg.high_attention_entropy_threshold,
         attn_vent > cfg.high_attention_varentropy_threshold,
-    ).astype(float)
+    ).astype(jnp.float32)
 
-    case = jnp.argmax(jnp.hstack([FLOWING, TREADING, EXPLORING, RESAMPLING, jnp.array(1.0).reshape(1)]))
+    # Determine which state we're in using JAX operations
+    case = jnp.argmax(jnp.stack([FLOWING, TREADING, EXPLORING, RESAMPLING, jnp.array(1.0)]))
 
-    def flowing():
+    def flowing(_):
+        """Direct argmax sampling for flowing state."""
         return jnp.argmax(logits[:, -1], axis=-1, keepdims=True).astype(jnp.int32)
 
-    def treading():
-        if not jnp.isin(gen_tokens[:, -1], jnp.array([clarifying_question_token])).any():
+    def treading(_):
+        """Controlled temperature sampling with clarifying questions."""
+        # Check for clarifying token using JAX operations
+        contains_clarifying = jnp.sum(jnp.where(gen_tokens[:, -1] == clarifying_question_token, 1, 0)) == 0
+        temp_adj = cfg.high_entropy_attention_offset + cfg.high_entropy_attention_coefficient * attn_ent
+        
+        def sample_with_temp(_):
+            return _sample(
+                logits,
+                temperature=jnp.minimum(1.5, cfg.temperature * temp_adj),
+                top_p=cfg.top_p,
+                top_k=cfg.top_k,
+                min_p=cfg.min_probability,
+                key=key
+            )
+            
+        def return_clarifying(_):
             return jnp.array([[clarifying_question_token]])
+            
+        return lax.cond(contains_clarifying, return_clarifying, sample_with_temp, None)
+
+    def exploring(_):
+        """Temperature-adjusted sampling for exploration."""
         temp_adj = cfg.high_entropy_attention_offset + cfg.high_entropy_attention_coefficient * attn_ent
         return _sample(
             logits,
@@ -119,18 +152,8 @@ def sample(
             key=key
         )
 
-    def exploring():
-        temp_adj = cfg.high_entropy_attention_offset + cfg.high_entropy_attention_coefficient * attn_ent
-        return _sample(
-            logits,
-            temperature=jnp.minimum(1.5, cfg.temperature * temp_adj),
-            top_p=cfg.top_p,
-            top_k=cfg.top_k,
-            min_p=cfg.min_probability,
-            key=key
-        )
-
-    def resampling():
+    def resampling(_):
+        """Adjusted sampling parameters for resampling state."""
         temp_adj = cfg.high_entropy_varentropy_attention_offset + cfg.high_entropy_varentropy_attention_coefficient * attn_vent
         top_p_adj = jnp.maximum(0.5, cfg.top_p - cfg.high_entropy_attention_coefficient * attn_ent)
         return _sample(
@@ -142,7 +165,8 @@ def sample(
             key=key
         )
 
-    def adaptive_sampling():
+    def adaptive_sampling(_):
+        """Score-based adaptive sampling."""
         def score_sample(sample):
             sample_oh = jax.nn.one_hot(sample, logits.shape[-1])
             log_prob = jnp.sum(jax.nn.log_softmax(logits[:, -1]) * sample_oh, axis=-1)
@@ -154,25 +178,42 @@ def sample(
             )
             return log_prob + confidence_score
 
+        # Generate multiple samples using vmap
         keys = jax.random.split(key, cfg.number_of_adaptive_samples)
-        samples = []
-        for sample_key in keys:
-            sample = _sample(
-                logits,
-                temperature=cfg.temperature,
-                top_p=cfg.top_p,
-                top_k=cfg.top_k,
-                min_p=cfg.min_probability,
-                key=sample_key
-            )
-            samples.append(sample)
+        sample_fn = lambda k: _sample(
+            logits,
+            temperature=cfg.temperature,
+            top_p=cfg.top_p,
+            top_k=cfg.top_k,
+            min_p=cfg.min_probability,
+            key=k
+        )
+        samples = jax.vmap(sample_fn)(keys)
+        
+        # Score samples using vmap
+        scores = jax.vmap(score_sample)(samples)
+        best_idx = jnp.argmax(scores)
+        return samples[best_idx]
 
-        sample_scores = jnp.array([score_sample(sample) for sample in samples])
-        best_sample_idx = jnp.argmax(sample_scores)
-        return samples[best_sample_idx]
+    # Use JAX's control flow for state switching
+    return lax.switch(case, [flowing, treading, exploring, resampling, adaptive_sampling], None)
 
-    return jax.lax.switch(case, (flowing, treading, exploring, resampling, adaptive_sampling))
+def calculate_metrics(logits: jnp.ndarray, attention_scores: jnp.ndarray) -> Dict[str, jnp.ndarray]:
+    """Calculate entropy and varentropy metrics for sampling decisions."""
+    entropy, varentropy = calculate_varentropy_logsoftmax(logits)
+    attention_probs = jax.nn.softmax(attention_scores, axis=-1)
+    attn_entropy = -jnp.sum(
+        attention_probs * jnp.log2(jnp.clip(attention_probs, 1e-10, 1.0)), 
+        axis=-1
+    )
+    attn_varentropy = jnp.var(attn_entropy, axis=1)
 
+    return {
+        "logits_entropy": jnp.mean(entropy),
+        "logits_varentropy": jnp.mean(varentropy),
+        "attn_entropy": jnp.mean(attn_entropy),
+        "attn_varentropy": jnp.mean(attn_varentropy),
+    }
 
 def calculate_varentropy_logsoftmax(
   logits: jnp.ndarray, axis: int = -1
