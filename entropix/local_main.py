@@ -131,7 +131,7 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
     sample_fn = jax.jit(sample)
 
 
-    @functools.partial(jax.jit, static_argnames=("xfmr_weights", "model_params", "tokenizer"))
+    @functools.partial(jax.jit, static_argnames=("xfmr_weights", "model_params", "tokens"))
     def generate(xfmr_weights, model_params, tokens):
         """Generate text from input tokens."""
         gen_tokens = None
