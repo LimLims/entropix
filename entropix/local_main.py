@@ -1,12 +1,13 @@
 # File: entropix/local_main.py
 
 import os
-os.environ['XLA_FLAGS'] = (
-    '--xla_gpu_enable_triton_softmax_fusion=true '
-    '--xla_gpu_triton_gemm_any=True '
-    '--xla_gpu_enable_async_collectives=true '
-    '--xla_gpu_enable_latency_hiding_scheduler=true '
-    '--xla_gpu_enable_highest_priority_async_stream=true '
+os.environ["XLA_FLAGS"] = (
+    "--xla_gpu_enable_triton_softmax_fusion=true "
+    "--xla_gpu_triton_gemm_any=True "
+    "--xla_gpu_enable_async_collectives=true "
+    "--xla_gpu_enable_latency_hiding_scheduler=true "
+    "--xla_gpu_enable_highest_priority_async_stream=true "
+    "--xla_force_host_platform_device_count=1"
 )
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
