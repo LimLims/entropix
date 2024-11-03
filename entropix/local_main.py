@@ -31,6 +31,18 @@ from entropix.weights import load_weights, download_weights
 
 DEFAULT_WEIGHTS_PATH = Path(__file__).parent / '../weights'
 
+def get_device():
+    """Get the first available GPU device or CPU if no GPU is available."""
+    devices = jax.devices("gpu")
+    if not devices:
+        print("WARNING: No GPU devices found, falling back to CPU")
+        return jax.devices("cpu")[0]
+    return devices[0]
+
+def to_device(x):
+    """Helper function to move arrays to device."""
+    return jax.device_put(x, get_device())
+
 def apply_scaling(freqs: jax.Array):
     """Scale frequencies for rotary embeddings."""
     SCALE_FACTOR = 8.0
@@ -110,9 +122,15 @@ def __build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
     return mask
 
 def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
-    print("JAX devices:", jax.devices())
-    print("Default backend:", jax.default_backend())
-    print("Process backend:", jax.process_index())
+    # Print JAX configuration
+    print("\nJAX Configuration:")
+    print("==================")
+    print(f"JAX version: {jax.__version__}")
+    print(f"Available devices: {jax.devices()}")
+    print(f"Default backend: {jax.default_backend()}")
+    print(f"Process index: {jax.process_index()}")
+    print(f"Local device count: {jax.local_device_count()}")
+    
     
     """Main function for local inference."""
     # Initialize model parameters
@@ -131,9 +149,21 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
     sample_fn = jax.jit(sample)
 
 
-    @functools.partial(jax.jit, static_argnames=("xfmr_weights", "model_params", "tokens"))
     def generate(xfmr_weights, model_params, tokens):
         """Generate text from input tokens."""
+        
+        @functools.partial(jax.jit, static_argnames=("cur_pos",))
+        def generate_step(weights, params, tokens, cur_pos, freqs_cis_slice, kvcache, attn_mask=None):
+            return xfmr_fn(
+                weights,
+                params,
+                tokens,
+                cur_pos,
+                freqs_cis_slice,
+                kvcache,
+                attn_mask=attn_mask
+            )
+        
         gen_tokens = None
         cur_pos = 0
         tokens = jax.device_put(jnp.array([tokens], jnp.int32), jax.devices("gpu")[0])
@@ -154,7 +184,7 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
         )
 
         # Initial forward pass
-        logits, kvcache, scores = xfmr_fn(
+        logits, kvcache, scores = generate_step(
             xfmr_weights,
             model_params,
             tokens,
@@ -176,7 +206,7 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
         # Generation loop
         while cur_pos < model_params.max_seq_len:
             cur_pos += 1
-            logits, kvcache, scores = xfmr_fn(
+            logits, kvcache, scores = generate_step(
                 xfmr_weights,
                 model_params,
                 next_token,
