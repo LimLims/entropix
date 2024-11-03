@@ -1,6 +1,7 @@
 # File: entropix/local_main.py
 
 import os
+import functools
 os.environ["XLA_FLAGS"] = (
     "--xla_gpu_enable_triton_softmax_fusion=true "
     "--xla_gpu_triton_gemm_any=true "
@@ -129,7 +130,72 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
 
     sample_fn = jax.jit(sample)
 
+
+    @functools.partial(jax.jit, static_argnames=("xfmr_weights", "model_params", "tokenizer"))
     def generate(xfmr_weights, model_params, tokens):
+        """Generate text from input tokens."""
+        gen_tokens = None
+        cur_pos = 0
+        tokens = jax.device_put(jnp.array([tokens], jnp.int32), jax.devices("gpu")[0])
+        bsz, seqlen = tokens.shape
+        attn_mask = build_attn_mask(seqlen, cur_pos)
+        freqs_cis = precompute_freqs_cis(
+            model_params.head_dim,
+            model_params.max_seq_len,
+            model_params.rope_theta,
+            model_params.use_scaled_rope
+        )
+        kvcache = KVCache.new(
+            model_params.n_layers,
+            bsz,
+            model_params.max_seq_len,
+            model_params.n_local_kv_heads,
+            model_params.head_dim
+        )
+
+        # Initial forward pass
+        logits, kvcache, scores = xfmr_fn(
+            xfmr_weights,
+            model_params,
+            tokens,
+            cur_pos,
+            freqs_cis[:seqlen],
+            kvcache,
+            attn_mask=attn_mask
+        )
+
+        # Get first token
+        next_token = jnp.argmax(logits[:, -1], axis=-1, keepdims=True).astype(jnp.int32)
+        print(tokenizer.decode([next_token.item()]), end='', flush=True)
+
+        cur_pos = seqlen
+        stop = jnp.array([tokenizer.eos_id, tokenizer.eot_id, tokenizer.eom_id])
+        sampler_cfg = SamplerConfig()
+        gen_tokens = [next_token]
+
+        # Generation loop
+        while cur_pos < model_params.max_seq_len:
+            cur_pos += 1
+            logits, kvcache, scores = xfmr_fn(
+                xfmr_weights,
+                model_params,
+                next_token,
+                cur_pos,
+                freqs_cis[cur_pos:cur_pos+1],
+                kvcache
+            )
+            next_token = sample_fn(logits, scores, gen_tokens)
+            gen_tokens.append(next_token)
+            
+            # Decode and print token
+            out_token = tokenizer.decode(next_token.tolist()[0])
+            print(out_token, end='', flush=True)
+
+            # Check if we hit a stop token
+            if jnp.isin(next_token, stop).any():
+                break
+        
+    def __generate(xfmr_weights, model_params, tokens):
         """Generate text from input tokens."""
         gen_tokens = None
         cur_pos = 0
