@@ -1,5 +1,6 @@
 # File: entropix/weights.py
 import torch
+import time
 from typing import List, NamedTuple
 import jax
 import jax.numpy as jnp
@@ -187,4 +188,66 @@ def load_weights(ckpt_dir: Path, n_layers: int = 24):  # Default to SmolLM layer
         layer_weights=layer_weights
     )
 
+    return xfmr_weights
+
+def load_weights(ckpt_dir: Path, n_layers: int = 24):
+    """Load SmolLM weights from checkpoint directory."""
+    w = {}
+    layer_weights = []
+    
+    # Get GPU device
+    device = jax.devices("gpu")[0]
+    
+    print("\nLoading weights:")
+    print("================")
+    start_time = time.time()
+    
+    # Create mesh with GPU devices
+    mesh = jax.sharding.Mesh(
+        mesh_utils.create_device_mesh((1, 1), devices=[device]), 
+        ('mp', 'fsdp')
+    )
+    
+    for file in ckpt_dir.glob("*.npy"):
+        name = '.'.join(str(file).split('/')[-1].split('.')[:-1])
+        weight = jnp.load(file=file, mmap_mode='r', allow_pickle=True)
+        partition_spec = create_partition_spec(name)
+        sharding = NamedSharding(mesh, partition_spec)
+        
+        # Explicitly place on GPU and ensure bfloat16
+        weight = jax.device_put(weight.astype(jnp.bfloat16), device)
+        w[name] = weight
+    
+    # Build layer weights
+    for i in range(n_layers):
+        layer = LayerWeights(
+            wq=w[f'layers.{i}.attention.wq.weight'],
+            wk=w[f'layers.{i}.attention.wk.weight'],
+            wv=w[f'layers.{i}.attention.wv.weight'],
+            wo=w[f'layers.{i}.attention.wo.weight'],
+            w1=w[f'layers.{i}.feed_forward.w1.weight'],
+            w2=w[f'layers.{i}.feed_forward.w2.weight'],
+            w3=w[f'layers.{i}.feed_forward.w3.weight'],
+            ffn_norm=w[f'layers.{i}.ffn_norm.weight'],
+            attention_norm=w[f'layers.{i}.attention_norm.weight'],
+        )
+        layer_weights.append(layer)
+    
+    xfmr_weights = XfmrWeights(
+        tok_embeddings=w['tok_embeddings.weight'],
+        norm=w['norm.weight'],
+        output=w['output.weight'],
+        layer_weights=layer_weights
+    )
+    
+    print(f"Weight loading took: {time.time() - start_time:.2f} seconds")
+    
+    # Verify weights are on GPU
+    def check_device(arr):
+        return str(arr.device())
+    
+    devices = jax.tree_map(check_device, xfmr_weights)
+    print("\nWeight devices:")
+    print(jax.tree_map(lambda x: x.split('/')[-1], devices))
+    
     return xfmr_weights

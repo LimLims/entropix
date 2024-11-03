@@ -1,7 +1,7 @@
 # File: entropix/local_main.py
 
 import os
-import functools
+import time
 os.environ["XLA_FLAGS"] = (
     "--xla_gpu_enable_triton_softmax_fusion=true "
     "--xla_gpu_triton_gemm_any=true "
@@ -144,25 +144,59 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
     # Load weights and initialize components
     xfmr_weights = load_weights(weights_path.absolute(), n_layers=model_params.n_layers)
     tokenizer = Tokenizer('tokenizer.json')
-    xfmr_fn = jax.jit(xfmr, static_argnames=("model_params", "cur_pos"))
+    #xfmr_fn = jax.jit(xfmr, static_argnames=("model_params", "cur_pos"))
 
-    sample_fn = jax.jit(sample)
+    #sample_fn = jax.jit(sample)
+
+    print("\nCompiling functions...")
+    start_time = time.time()
+
+    # JIT compile the transformer and sampling functions
+    xfmr_fn = jax.jit(
+        xfmr, 
+        static_argnames=("model_params", "cur_pos"),
+        backend="gpu"
+    )
+    
+    sample_fn = jax.jit(
+        sample,
+        backend="gpu"
+    )
+    
+    print(f"Function compilation took: {time.time() - start_time:.2f} seconds")
+
 
 
     def generate(xfmr_weights, model_params, tokens):
         """Generate text from input tokens."""
+        print("\nStarting generate function...")
+        print("Moving input tensors to GPU...")
+        
         gen_tokens = None
         cur_pos = 0
-        # Place input tokens on GPU
-        tokens = jax.device_put(jnp.array([tokens], jnp.int32), jax.devices("gpu")[0])
+        
+        # Explicitly move tensors to GPU and time the operations
+        start_time = time.time()
+        device = jax.devices("gpu")[0]
+        
+        # Move weights to GPU if needed
+        print("Moving weights to GPU...")
+        xfmr_weights = jax.tree_map(lambda x: jax.device_put(x, device), xfmr_weights)
+        
+        tokens = jax.device_put(jnp.array([tokens], jnp.int32), device)
         bsz, seqlen = tokens.shape
-        attn_mask = build_attn_mask(seqlen, cur_pos)
-        freqs_cis = precompute_freqs_cis(
-            model_params.head_dim,
-            model_params.max_seq_len,
-            model_params.rope_theta,
-            model_params.use_scaled_rope
+        
+        attn_mask = jax.device_put(build_attn_mask(seqlen, cur_pos), device)
+        freqs_cis = jax.device_put(
+            precompute_freqs_cis(
+                model_params.head_dim,
+                model_params.max_seq_len,
+                model_params.rope_theta,
+                model_params.use_scaled_rope
+            ),
+            device
         )
+        
         kvcache = KVCache.new(
             model_params.n_layers,
             bsz,
@@ -170,8 +204,14 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
             model_params.n_local_kv_heads,
             model_params.head_dim
         )
+        kvcache = jax.tree_map(lambda x: jax.device_put(x, device), kvcache)
+        
+        print(f"Initial setup took: {time.time() - start_time:.2f} seconds")
 
         # Initial forward pass
+        print("\nStarting first forward pass...")
+        start_time = time.time()
+        
         logits, kvcache, scores = xfmr_fn(
             xfmr_weights,
             model_params,
@@ -181,6 +221,8 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
             kvcache,
             attn_mask=attn_mask
         )
+        jax.block_until_ready(logits)  # Make sure computation is complete
+        print(f"First forward pass took: {time.time() - start_time:.2f} seconds")
 
         # Get first token
         next_token = jnp.argmax(logits[:, -1], axis=-1, keepdims=True).astype(jnp.int32)
@@ -192,8 +234,13 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
         gen_tokens = [next_token]
 
         # Generation loop
+        print("\nStarting generation loop...")
+        token_times = []
+        
         while cur_pos < model_params.max_seq_len:
+            token_start = time.time()
             cur_pos += 1
+            
             logits, kvcache, scores = xfmr_fn(
                 xfmr_weights,
                 model_params,
@@ -203,15 +250,24 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
                 kvcache
             )
             next_token = sample_fn(logits, scores, gen_tokens)
+            jax.block_until_ready(next_token)  # Make sure computation is complete
+            
             gen_tokens.append(next_token)
+            token_time = time.time() - token_start
+            token_times.append(token_time)
             
             # Decode and print token
             out_token = tokenizer.decode(next_token.tolist()[0])
-            print(out_token, end='', flush=True)
+            print(f"{out_token}", end='', flush=True)
 
             # Check if we hit a stop token
             if jnp.isin(next_token, stop).any():
                 break
+        
+        avg_token_time = sum(token_times) / len(token_times)
+        print(f"\n\nGeneration stats:")
+        print(f"Average time per token: {avg_token_time:.3f} seconds")
+        print(f"Tokens per second: {1/avg_token_time:.2f}")
         
     def __generate(xfmr_weights, model_params, tokens):
         """Generate text from input tokens."""
