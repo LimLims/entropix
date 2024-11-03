@@ -113,15 +113,7 @@ def build_attn_mask(seqlen: int, start_pos: int, max_seq_len: int = 2048) -> jax
     
     return mask
 
-def build_attn_mask(seqlen: int, cur_pos: int) -> jax.Array:
-    """Build attention mask."""
-    mask = jnp.zeros((seqlen, seqlen), dtype=jnp.float32)
-    if seqlen > 1:
-        # Create an upper triangular matrix for causal masking
-        mask = jnp.full((seqlen, seqlen), float("-inf"), dtype=jnp.float32)
-        mask = jnp.triu(mask, k=1)
-    # Add batch and head dimensions for broadcasting
-    return mask[None, None, ...]  # Shape: (1, 1, seqlen, seqlen)
+
 
 def __build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
     mask = jnp.zeros((seqlen, seqlen), dtype=jnp.float32)
@@ -646,9 +638,9 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
         tokens = jax.device_put(jnp.array([tokens], jnp.int32), device)
         bsz, seqlen = tokens.shape
         
-        # Ensure all inputs are on GPU with correct shapes
+        # Build attention mask normally - no extra dimensions
         attn_mask = build_attn_mask(seqlen, 0)
-        attn_mask = jax.device_put(attn_mask[None, None, :, :], device)  # Add batch and head dims
+        attn_mask = jax.device_put(attn_mask, device)
         
         freqs_cis = precompute_freqs_cis(
             model_params.head_dim,
@@ -672,15 +664,13 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
 
         # First forward pass
         print("\nStarting first forward pass...")
-        forward_start = time.time()
-        
-        # Verify tensor shapes before forward pass
         print(f"Input shapes:")
         print(f"tokens: {tokens.shape}")
         print(f"attn_mask: {attn_mask.shape}")
         print(f"freqs_cis: {freqs_cis.shape}")
         print(f"KV cache k shape: {kvcache.k.shape}")
         
+        forward_start = time.time()
         logits, kvcache, scores = xfmr_fn(
             xfmr_weights,
             model_params,
@@ -706,7 +696,7 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
 
         # Generation loop
         print("\nStarting generation loop...")
-        generation_times = []
+        token_times = []
         token_count = 0
         generation_start = time.time()
         
@@ -726,7 +716,7 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
             jax.block_until_ready(next_token)
             
             token_time = time.time() - token_start
-            generation_times.append(token_time)
+            token_times.append(token_time)
             token_count += 1
             
             gen_tokens.append(next_token)
@@ -736,15 +726,16 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
             if jnp.isin(next_token, stop).any():
                 break
         
-        total_time = time.time() - generation_start
-        avg_token_time = total_time / token_count if token_count > 0 else 0
-        
-        print(f"\n\nGeneration stats:")
-        print(f"Total tokens generated: {token_count}")
-        print(f"Total generation time: {total_time:.2f} seconds")
-        print(f"Average time per token: {avg_token_time:.3f} seconds")
-        print(f"Tokens per second: {1/avg_token_time:.2f}")
-        return gen_tokens
+        if token_count > 0:
+            total_time = time.time() - generation_start
+            avg_token_time = total_time / token_count
+            print(f"\n\nGeneration stats:")
+            print(f"Total tokens generated: {token_count}")
+            print(f"Total generation time: {total_time:.2f} seconds")
+            print(f"Average time per token: {avg_token_time:.3f} seconds")
+            print(f"Tokens per second: {1/avg_token_time:.2f}")
+        else:
+            print("\n\nNo tokens were generated")
     
     # Test warmup
     print("\nDoing warmup pass...")
