@@ -120,25 +120,30 @@ def sample(
         return jnp.argmax(logits[:, -1], axis=-1, keepdims=True).astype(jnp.int32)
 
     def treading(_):
-        """Controlled temperature sampling with clarifying questions."""
-        # Check for clarifying token using JAX operations
-        contains_clarifying = jnp.sum(jnp.where(gen_tokens[:, -1] == clarifying_question_token, 1, 0)) == 0
-        temp_adj = cfg.high_entropy_attention_offset + cfg.high_entropy_attention_coefficient * attn_ent
-        
-        def sample_with_temp(_):
-            return _sample(
-                logits,
-                temperature=jnp.minimum(1.5, cfg.temperature * temp_adj),
-                top_p=cfg.top_p,
-                top_k=cfg.top_k,
-                min_p=cfg.min_probability,
-                key=key
-            )
-            
-        def return_clarifying(_):
-            return jnp.array([[clarifying_question_token]])
-            
-        return lax.cond(contains_clarifying, return_clarifying, sample_with_temp, None)
+      """Controlled temperature sampling with clarifying questions."""
+      # Convert gen_tokens to JAX array if it isn't already
+      tokens_array = jnp.asarray(gen_tokens)
+      
+      # Get the last token and check if it equals clarifying_question_token
+      last_tokens = tokens_array[:, -1] if tokens_array.ndim > 1 else tokens_array[-1]
+      contains_clarifying = jnp.sum(jnp.where(last_tokens == clarifying_question_token, 1, 0)) == 0
+      
+      temp_adj = cfg.high_entropy_attention_offset + cfg.high_entropy_attention_coefficient * attn_ent
+      
+      def sample_with_temp(_):
+          return _sample(
+              logits,
+              temperature=jnp.minimum(1.5, cfg.temperature * temp_adj),
+              top_p=cfg.top_p,
+              top_k=cfg.top_k,
+              min_p=cfg.min_probability,
+              key=key
+          )
+          
+      def return_clarifying(_):
+          return jnp.array([[clarifying_question_token]])
+          
+      return lax.cond(contains_clarifying, return_clarifying, sample_with_temp, None)
 
     def exploring(_):
         """Temperature-adjusted sampling for exploration."""
