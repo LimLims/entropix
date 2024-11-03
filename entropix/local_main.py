@@ -113,6 +113,16 @@ def build_attn_mask(seqlen: int, start_pos: int, max_seq_len: int = 2048) -> jax
     
     return mask
 
+def build_attn_mask(seqlen: int, cur_pos: int) -> jax.Array:
+    """Build attention mask."""
+    mask = jnp.zeros((seqlen, seqlen), dtype=jnp.float32)
+    if seqlen > 1:
+        # Create an upper triangular matrix for causal masking
+        mask = jnp.full((seqlen, seqlen), float("-inf"), dtype=jnp.float32)
+        mask = jnp.triu(mask, k=1)
+    # Add batch and head dimensions for broadcasting
+    return mask[None, None, ...]  # Shape: (1, 1, seqlen, seqlen)
+
 def __build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
     mask = jnp.zeros((seqlen, seqlen), dtype=jnp.float32)
     if seqlen > 1:
