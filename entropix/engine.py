@@ -205,7 +205,7 @@ class EntropixEngine:
         rng: Optional[jax.random.PRNGKey] = None,
     ) -> Tuple[Prefix, ResultTokens]:
         """Compute KV cache for input tokens."""
-        cur_pos = 0
+        cur_pos = 0  # Ensure this is an integer
         bsz, seqlen = padded_tokens.shape
         attn_mask = self.build_attn_mask(seqlen, cur_pos)
         
@@ -222,7 +222,7 @@ class EntropixEngine:
             self.xfmr_weights,
             params,
             padded_tokens,
-            cur_pos,
+            cur_pos,  # This should be an integer
             self.freqs_cis[:seqlen],
             kvcache,
             attn_mask=attn_mask

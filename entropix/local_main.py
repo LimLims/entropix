@@ -78,7 +78,8 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1.7B-Instruct')):
     # Load weights and initialize components
     xfmr_weights = load_weights(weights_path.absolute(), n_layers=model_params.n_layers)
     tokenizer = Tokenizer('tokenizer.json')
-    xfmr_fn = jax.jit(xfmr, static_argnames=("model_params",))
+    xfmr_fn = jax.jit(xfmr, static_argnames=("model_params", "cur_pos"))
+
     sample_fn = jax.jit(sample)
 
     def generate(xfmr_weights, model_params, tokens):

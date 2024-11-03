@@ -47,7 +47,8 @@ async def run(
     tokenizer = Tokenizer(tokenizer_path)
     
     # JIT compile functions
-    xfmr_fn = jax.jit(xfmr, static_argnames=("model_params",))
+    xfmr_fn = jax.jit(xfmr, static_argnames=("model_params", "cur_pos"))
+
     sample_fn = jax.jit(sample)
 
     num_engines = 1

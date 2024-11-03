@@ -95,7 +95,8 @@ class ModelManager:
       xfmr_weights = load_weights(ckpt_path, n_layers=model_params.n_layers)
       self.tokenizer = Tokenizer(tokenizer_path)
 
-      xfmr_fn = jax.jit(xfmr, static_argnames=("model_params",))
+      xfmr_fn = jax.jit(xfmr, static_argnames=("model_params", "cur_pos"))
+
       #sample_fn = jax.jit(nucleus_sample)
       sample_fn = jax.jit(sample)
       num_engines = 1
